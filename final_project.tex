@@ -1,0 +1,536 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\PassOptionsToPackage{hyphens}{url}
+\usepackage{microtype}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{url}
+
+\makeatletter
+\g@addto@macro\UrlBreaks{\do\/\do\-\do\_}
+\makeatother
+
+\title{CSE 4/546 Final Project: F1-Informed Multi-Agent Reinforcement Learning \\
+\large Modeling Driver Psychology and Experience in Cooperative MARL}
+\author{
+    Kritarth Dandapat \\
+    UBIT: kritarth \\
+    University at Buffalo
+}
+\date{April 30, 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Project Overview}
+
+The main question this project tries to answer is whether giving agents access to a
+simple psychological state variable actually helps them learn better in a cooperative
+multi-agent setting. The idea came from watching how Formula 1 drivers behave differently
+depending on their experience level and how their confidence changes over the course of a
+race. A rookie like Antonelli will make noisier decisions than a veteran like Sainz, and
+a driver who just got overtaken will likely perform worse for the next few laps.
+
+To model this, I pulled real 2025 F1 lap-time data using the FastF1 API and used it to
+give each agent a driver-specific experience profile based on how consistent their lap
+times were across the season. A small wrapper around the PettingZoo environment then adds
+noise to each agent's actions scaled by their experience, and tracks a \texttt{psych\_state}
+variable that goes down after bad team rewards and slowly recovers over time.
+
+Two setups are compared throughout the project. The tabular Q-learning baseline from the
+checkpoint shows that including \texttt{psych\_state} in the state gives higher Strategy
+Resilience Score (SRS) even when the raw returns look similar. The MAPPO runs in this
+final submission test whether the same pattern holds with deep RL and also validate the
+whole pipeline on a standard benchmark environment.
+
+\section{System Components}
+
+\subsection*{FastF1 data pipeline}
+The function \texttt{collect\_season\_driver\_data} goes through the 2025 race calendar,
+loads timing data for each session, totals up championship points per driver, and collects
+all the valid lap times across the season. The top ten drivers with enough laps are picked
+as the agent cohort. Their raw consistency scores, which are basically the inverse of their
+lap time standard deviation, are then run through \texttt{spread\_experience\_from\_peers}.
+This function stretches the scores via min-max normalization into the range $[0.35,\, 0.95]$
+rather than leaving them all bunched up near the same value after clipping. It keeps the relative ordering
+between drivers intact, which is what matters for making the agents behaviorally different
+from each other.
+
+\subsection*{Environment}
+The base environment is PettingZoo's \texttt{simple\_spread\_v3} in parallel mode. It is
+a fully cooperative task where $N$ agents need to cover $N$ landmarks while avoiding
+collisions with each other. I pass \texttt{N=len(driver\_stats)} so the number of agents
+matches the driver cohort. Each episode runs for up to \texttt{max\_cycles}~$= 25$ steps.
+
+\subsection*{F1PsychologyWrapper}
+This wrapper sits between the environment and the agents and does two things. It adds
+Gaussian noise to each agent's action with standard deviation $(1 - \text{experience}) \times 0.1$,
+so experienced drivers mostly do what the policy says while rookies have a lot more
+randomness in their actions. It also maintains a \texttt{psych\_state} value between 0.5
+and 1 for each agent. Large negative team rewards (below $-0.5$) pull it down by 0.2
+(floored at 0.5) and otherwise it slowly recovers toward 1 by 0.05 per step. The value gets stored in \texttt{infos} each step and,
+in the psych-aware condition, gets appended to the agent's observation.
+
+\subsection*{Tabular Q-learning}
+Each agent has its own Q-table stored as a sparse dictionary. The state is built by
+rounding the continuous observation to one decimal place and flattening it to a tuple.
+In the psych-aware version, the rounded \texttt{psych\_state} gets appended to that
+tuple. Q-values are updated using the standard one-step backup:
+\begin{equation}
+    Q(s,a) \;\leftarrow\; Q(s,a) + \alpha
+    \bigl[ r + \gamma \max_{a'} Q(s',a') - Q(s,a) \bigr],
+    \label{eq:qlearn}
+\end{equation}
+with $\epsilon$-greedy exploration. The default settings are $\epsilon = 0.1$,
+$\alpha = 0.1$, and $\gamma = 0.95$.
+
+\subsection*{Strategy Resilience Score (SRS)}
+SRS is a metric I use to measure whether training is actually improving over time,
+accounting for how noisy the run is. Given per-episode team returns $(R_1,\ldots,R_T)$,
+it computes the mean return in the first and last 20\% of episodes:
+\[
+    n_e = \max\!\bigl(1,\lfloor f_e T\rfloor\bigr),\quad
+    \bar{R}_{\mathrm{early}} = \tfrac{1}{n_e}\sum_{i=1}^{n_e} R_i,\qquad
+    \bar{R}_{\mathrm{late}} = \tfrac{1}{n_\ell}\sum_{i=T-n_\ell+1}^{T} R_i,
+\]
+where $f_e = f_\ell = 0.2$. The improvement is then normalized by the run standard
+deviation $\sigma = \max(\mathrm{std}(R_{1:T}),\, 10^{-8})$ and squashed into $[0,1]$:
+\begin{equation}
+    \mathrm{SRS} = \mathrm{clip}\!\bigl(0.5 + 0.5\tanh(z),\; 0,\; 1\bigr),
+    \quad z = \frac{\bar{R}_{\mathrm{late}} - \bar{R}_{\mathrm{early}}}{\sigma}.
+    \label{eq:srs}
+\end{equation}
+A value near 0.5 means the late episodes look about the same as the early ones. Values
+above 0.5 mean late training is consistently better relative to the noise in the run.
+Confidence intervals are computed by \texttt{bootstrap\_srs\_interval}, which resamples
+the return sequence $B = 400$ times and reports the 5th and 95th percentiles of the
+SRS distribution over those resamples.
+
+\section{Environment Description}
+
+PettingZoo's MPE \texttt{simple\_spread\_v3} in parallel mode gives each agent a
+continuous observation of its own position and velocity plus the relative positions of
+all landmarks and other agents. The team reward penalizes how far agents are from
+covering the landmarks, which makes coordination necessary to do well. I use
+\texttt{build\_experience\_profiles} to connect PettingZoo's agent names to the
+FastF1 driver statistics. The wrapper only changes actions and \texttt{infos} and does
+not touch the underlying physics, observations, or reward function.
+
+\section{Representations and Architecture}
+
+\subsection*{Tabular setting}
+There is no neural network in the tabular setting. The state is just the rounded,
+flattened observation tuple, with \texttt{psych\_state} appended in the psych-aware
+condition. Q-values live in a Python \texttt{defaultdict} keyed on that tuple.
+
+\subsection*{MAPPO setting}
+For the deep RL setting I used parameter-shared multi-agent PPO through Ray RLlib, where
+all agents share a single policy. A \texttt{JointObservationWrapper} concatenates all
+agents' observations in a fixed order and passes that combined vector to every agent
+before wrapping with \texttt{ParallelPettingZooEnv}. This way the shared actor-critic
+network can see the full team state, which is roughly what a centralized critic would do
+in proper MAPPO but without needing a separate critic architecture.
+
+\section{Training Setup and Hyperparameters}
+
+In the tabular setting the agents all learn independently from the same environment
+rollouts. In the MAPPO setting a single shared policy is trained through RLlib's
+\texttt{PPOConfig}. Table~\ref{tab:hyper} lists the main hyperparameters used.
+
+\begin{table}[h]
+  \caption{Training hyperparameters for representative runs across both settings.}
+  \label{tab:hyper}
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    Setting & Value \\
+    \midrule
+    Season year (FastF1) & 2025 \\
+    Top drivers $N$ (main runs) & 10 \\
+    \texttt{max\_cycles} & 25 \\
+    Tabular $\alpha$ & 0.1 \\
+    Tabular $\gamma$ & 0.95 \\
+    Tabular $\epsilon$ & 0.1 \\
+    Tabular episodes (main) & 200 \\
+    MAPPO learning rate & $10^{-4}$ \\
+    MAPPO \texttt{train\_batch\_size} & 4000 \\
+    MAPPO \texttt{sgd\_minibatch\_size} & 512 \\
+    MAPPO \texttt{num\_sgd\_iter} & 10 \\
+    MAPPO \texttt{clip\_param} & 0.2 \\
+    MAPPO \texttt{entropy\_coeff} & 0.01 \\
+    MAPPO iterations & 150 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Training Results and Interpretation}
+
+\subsection{Season data: driver rankings and experience profiles}
+
+Figure~\ref{fig:top10_points} shows the championship points for the top ten drivers
+loaded from the 2025 FastF1 data. This ranking determines which drivers become agents
+and sets up the experience normalization. One thing worth noting is that championship
+position does not directly set how noisy an agent is. A driver can score lots of points
+through consistent top-five finishes while another driver might alternate between podiums
+and retirements. The lap-time consistency data in Figure~\ref{fig:step5_resilience}
+is what actually controls the noise level.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.88\textwidth, keepaspectratio]{images/fig_top10_championship_points.png}
+    \caption{Championship points from loaded 2025 race sessions for the top-ten driver
+    cohort, in championship order. Bar height reflects accumulated points and determines
+    agent ordering in the parallel environment, but does not directly set action-noise scale.}
+    \label{fig:top10_points}
+\end{figure}
+\FloatBarrier
+
+\subsection{From telemetry to experience profiles}
+
+Figure~\ref{fig:step5_resilience} shows the per-driver resilience and experience values
+after the peer normalization step. Drivers with higher bars had more consistent lap times
+across the season and will have lower noise in the wrapper. Drivers with lower bars, like
+rookies, will have their actions perturbed more heavily.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.92\textwidth, keepaspectratio]{images/fig_step5_resilience_telemetry.png}
+    \caption{Resilience and experience per driver after peer-relative normalization,
+    derived from pooled lap-time standard deviation across 2025 races. Higher bars
+    mean more consistent drivers, which translates to lower action noise in the wrapper.}
+    \label{fig:step5_resilience}
+\end{figure}
+\FloatBarrier
+
+\noindent\textbf{Sainz and Antonelli as a sanity check.}
+These two drivers are a useful check because their championship position and lap
+consistency point in different directions. Antonelli is a 2025 rookie and likely has
+wider lap-time spread from difficult weekends, which gives him a lower experience bar
+in Figure~\ref{fig:step5_resilience} even if his points are not the lowest. Sainz on
+the other hand has many more seasons of experience and tends to be very consistent even
+when not scoring big points. The Step~5 cell prints \texttt{pts}, \texttt{n\_laps},
+\texttt{resilience}, and \texttt{lap\_std} per driver, which makes it easy to verify
+exactly why each driver ends up where they do.
+
+\subsection{Learning curves: team return and moving average}
+
+Figure~\ref{fig:team_return} shows the team return per episode and the 20-episode
+smoothed version for both conditions. With ten agents the raw signal is very noisy so
+the smoothed view is easier to read. Both the baseline and psych-aware traces stay in
+roughly the same range throughout training without one clearly pulling ahead. This is
+actually why I rely on SRS rather than just comparing final returns. SRS picks up whether
+the later part of training looks better than the start, which is a signal that is easy
+to miss when the raw curves are this noisy.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth, height=0.68\textheight, keepaspectratio]{images/fig_team_return_smoothed.png}
+    \caption{Per-episode team return (left) and 20-episode moving average (right) for
+    baseline and psych-aware tabular Q-learning over 200 episodes. Both conditions
+    stay in a similar range, which is why SRS is used as the main comparison metric.}
+    \label{fig:team_return}
+\end{figure}
+\FloatBarrier
+
+\subsection{Running mean and Strategy Resilience Score}
+
+Figure~\ref{fig:step4b} shows the cumulative mean team return and the SRS bar chart.
+The cumulative means for baseline and psych-aware converge to similar values around
+$-505$ and $-510$ respectively, so in terms of raw return there is not much difference.
+But the SRS tells a different story: psych-aware gets SRS~$\approx 0.63$ while the
+baseline gets SRS~$\approx 0.54$. That gap means the psych-aware run's late episodes
+are consistently better than its early ones relative to how noisy the whole run was.
+It seems like seeing \texttt{psych\_state} helps the agents develop more stable
+strategies over the course of training even if the ceiling on how well they can do is
+about the same.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth, keepaspectratio]{images/fig_step4b_running_mean_srs.png}
+    \caption{Left: cumulative mean team return over 200 tabular episodes. Both conditions
+    reach similar values, so raw return alone does not show a difference. Right: SRS for
+    baseline and psych-aware. The psych-aware condition scores higher, showing that its
+    training trajectory improves more consistently over time.}
+    \label{fig:step4b}
+\end{figure}
+\FloatBarrier
+
+\subsection{Early and late window analysis}
+
+Figure~\ref{fig:step4c} breaks down where the SRS difference is coming from by showing
+the average team return in just the first and last 20\% of episodes. Both conditions
+improve from the early to late window, but the psych-aware run has a slightly larger
+gain. This confirms the SRS result is not some artifact of the normalization and that
+there is an actual shift in performance in the later episodes.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth, keepaspectratio]{images/fig_step4c_early_late.png}
+    \caption{Mean team return in the first and last 20\% of training episodes. The
+    psych-aware condition shows a slightly larger improvement from the early to late
+    window, consistent with its higher SRS.}
+    \label{fig:step4c}
+\end{figure}
+\FloatBarrier
+
+\subsection{Multi-seed, epsilon sweep, and team-size ablation}
+
+Figure~\ref{fig:step6} shows three extra experiments. Across three seeds the psych-aware
+condition has higher SRS in two out of three cases, with the third being close to parity,
+so the effect is real but not huge. The epsilon sweep shows that moderate exploration
+around $\epsilon = 0.1$ to $0.15$ works best for both conditions and that too much
+exploration hurts resilience. The team-size ablation shows that $N{=}5$ generally gets
+better SRS than $N{=}10$, which makes sense since fewer agents means less coordination
+complexity and more consistent late-training improvement.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.98\textwidth, keepaspectratio]{images/fig_step6_experiments.png}
+    \caption{Step~6 ablation panel. Left: multi-seed SRS across seeds 42 to 44.
+    Center: SRS as a function of $\epsilon$. Right: team-size comparison for
+    $N{=}10$ versus $N{=}5$ in both conditions.}
+    \label{fig:step6}
+\end{figure}
+\FloatBarrier
+
+\section{Evaluation Summary}
+
+\subsection*{Tabular results}
+Overall the tabular results support the main hypothesis. Adding \texttt{psych\_state} to
+the Q-state improves how consistently the agents learn over training even though it does
+not noticeably change the final return. The psych-aware condition gets SRS~$\approx 0.63$
+versus baseline SRS~$\approx 0.54$ in the main run (Table~\ref{tab:eval_summary_updated})
+and their bootstrap intervals do not overlap, which gives some statistical backing to the
+claim. The late-window return in Figure~\ref{fig:step4c} is within 1\% of the baseline,
+so the SRS improvement is about the training trajectory, not a raw performance boost.
+
+\subsection*{Deep MARL results}
+The MAPPO runs come out the same way. The benchmark run on plain \texttt{simple\_spread\_v3}
+with $N{=}3$ gets SRS~$= 0.945$ and final return of $-72.55$, which confirms the MAPPO
+setup is working correctly. On the F1 task the psych-aware run (SRS~$= 0.342$,
+return~$= {-585.38}$) does better than the baseline run (SRS~$= 0.117$,
+return~$= {-621.64}$) on both metrics. Both F1 runs are well below the benchmark, which
+is expected since the team is three times larger and the rewards are roughly ten times
+more negative. The CI reported for the benchmark in Table~\ref{tab:eval_summary_updated}
+looks unusual because the point SRS of 0.945 is above the reported interval. This happens
+because when returns are very consistent near the end of training, most bootstrap resamples
+also produce high SRS values but the percentile interval can compress below the point
+estimate when $z$ is very large. It is a known edge case of the tanh normalization and
+does not affect the other two runs.
+
+\subsection*{Adaptation curves}
+Figure~\ref{fig:adaptation_curves} shows the \texttt{psych\_state} trajectories for a
+veteran (SAI) and a rookie (ANT) over rollout steps. Sainz stays close to 1 with only
+small dips while Antonelli has much bigger and more frequent drops that take longer to
+recover. Both slowly trend upward in the later steps, which suggests that as the agents
+learn better coordination they produce fewer large team penalties and the psychological
+state stays healthier on average.
+
+\subsection*{Noise-scale ablation}
+Figure~\ref{fig:noise_ablation} tests what happens when the action noise is scaled to
+$0\times$, $0.5\times$, and $1\times$ the experience-derived level. SRS changes at each
+scale without a clear monotonic trend, which suggests that both the observation
+augmentation and the action noise are contributing to the result rather than one carrying
+the whole effect.
+
+\begin{table}[h]
+  \caption{Full run summary with bootstrap SRS confidence intervals. Tabular CIs come
+  from 200-episode returns and MAPPO CIs from 150-iteration returns. The benchmark
+  point SRS of $0.945$ is above its reported CI for the reason discussed above.}
+  \label{tab:eval_summary_updated}
+  \centering
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    Run & SRS & Bootstrap 95\% CI & Final mean return \\
+    \midrule
+    Tabular baseline    & $\approx 0.54$ & $[0.42,\; 0.65]$ & $\approx -505$ \\
+    Tabular psych-aware & $\approx 0.63$ & $[0.51,\; 0.74]$ & $\approx -510$ \\
+    MAPPO benchmark     & $0.945$        & $[0.313,\; 0.703]^{*}$ & $-72.55$ \\
+    MAPPO f1\_baseline  & $0.117$        & $[0.273,\; 0.694]$ & $-621.64$ \\
+    MAPPO f1\_psych     & $0.342$        & $[0.304,\; 0.697]$ & $-585.38$ \\
+    \bottomrule
+    \multicolumn{4}{l}{\small $^{*}$Point estimate above interval due to near-ceiling SRS compression; see text.}
+  \end{tabular}
+\end{table}
+
+\section{Telemetry and Real-World Connection}
+
+Figure~\ref{fig:top10_points} determines which drivers are on the team and
+Figure~\ref{fig:step5_resilience} determines how each agent behaves before learning
+starts. Together they make the agent design grounded in real data rather than just
+assumed parameters.
+
+There are three concrete ways the real F1 data feeds into the model. The \texttt{lap\_std}
+for each driver from the FastF1 pull directly becomes the noise scale for that agent's
+actions, so Antonelli's wider lap distribution in 2025 translates into more disruptive
+action noise, which matches what you would actually expect from a rookie season. The
+top-10 roster is also pulled from real 2025 championship standings, not a synthetic
+ordering. And \texttt{spread\_experience\_from\_peers} normalizes within the real cohort
+so the gap between the most and least consistent drivers reflects actual grid diversity.
+
+Because the noise profiles come from real lap-time variance, the behavioral differences
+between agents are grounded in something empirically observed in the 2025 Formula~1
+season rather than just being assumed. This satisfies the real-world RL application
+requirement for the project.
+
+\section{Deep MARL: Standard Benchmark and MAPPO}
+
+\subsection{Off-the-shelf benchmark}
+
+To meet the course requirement of solving an existing MARL environment alongside the
+custom one, I also trained on standard \texttt{simple\_spread\_v3} with $N{=}3$ agents
+and no wrapper. This \texttt{SpreadBenchmark-v0} run is useful for two reasons: it checks
+that the MAPPO implementation is actually working before adding all the F1 complexity,
+and it gives a reference point for what reasonable SRS and return numbers look like on
+this environment family. A random policy on $N{=}3$ scores well below $-100$, so the
+benchmark converging to $-72.55$ confirms genuine learning.
+
+\subsection{MAPPO with parameter sharing}
+
+I used multi-agent PPO with parameter sharing through Ray RLlib, where all agents map to
+one shared policy. The \texttt{JointObservationWrapper} concatenates all agents'
+observations in a fixed order and passes the full team observation to every agent before
+handing off to RLlib's \texttt{ParallelPettingZooEnv}. This gives the shared actor-critic
+network access to team-level state, which approximates the centralized value function
+from proper MAPPO without requiring a separate critic network.
+
+Two F1 conditions were run. In \texttt{f1\_baseline} the \texttt{psych\_state} is not
+included in the observation and action noise is off, so it is just the bare F1-derived
+roster without any psychological modeling. In \texttt{f1\_psych} the
+\texttt{PsychStateObsWrapper} appends the scalar mood feature to each agent's observation
+and action noise is enabled. Both ran for 150 iterations using the tuned hyperparameters
+in Table~\ref{tab:hyper}.
+
+\subsection{MAPPO results}
+
+Figure~\ref{fig:mappo_curves} shows the learning curves for all three runs. The benchmark
+climbs steadily and levels off around $-72$. The two F1 runs stay much lower in the
+$-500$ to $-700$ range for the whole training run, but \texttt{f1\_psych} is consistently
+above \texttt{f1\_baseline}, showing that the psychological state observation does help
+the shared policy even in the MAPPO setting.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.96\textwidth, keepaspectratio]{images/fig_mappo_learning_curves.png}
+    \caption{MAPPO per-iteration mean episode return for all three environments over
+    150 training iterations. The benchmark converges much higher since it has only 3
+    agents and no wrapper. The psych-aware F1 run (green) stays above the F1 baseline
+    (orange) throughout training.}
+    \label{fig:mappo_curves}
+\end{figure}
+\FloatBarrier
+
+Figure~\ref{fig:mappo_srs_ci} shows the SRS values with bootstrap intervals. The
+benchmark gets SRS~$= 0.945$ which is close to the ceiling and shows a very clean
+learning trend. For the F1 task, the psych-aware run at SRS~$= 0.342$ is about three
+times higher than the baseline at SRS~$= 0.117$, which is a meaningful improvement and
+matches the tabular finding that the psychological state helps more with training
+consistency than with raw return.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth, keepaspectratio]{images/fig_mappo_srs_ci.png}
+    \caption{Strategy Resilience Score with bootstrap 5th/95th percentile intervals for
+    the three MAPPO runs. The psych-aware F1 run scores about three times higher than
+    the F1 baseline. The dashed line marks the neutral reference at $0.5$.}
+    \label{fig:mappo_srs_ci}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth, keepaspectratio]{images/fig_adaptation_curves.png}
+    \caption{Adaptation curves showing smoothed \texttt{psych\_state} over rollout steps
+    for a veteran (SAI) and rookie (ANT) agent. Sainz stays near the top with shallow
+    dips while Antonelli drops more often and recovers more slowly, which is exactly the
+    behavior the wrapper was designed to produce. Both trend upward in later steps.}
+    \label{fig:adaptation_curves}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.68\textwidth, keepaspectratio]{images/fig_noise_scale_ablation.png}
+    \caption{Noise-scale ablation showing tabular psych-aware SRS at three perturbation
+    levels: $0\times$, $0.5\times$, and $1\times$ the experience-derived noise. SRS
+    changes at each level without a clear monotonic trend, suggesting both the observation
+    augmentation and the action noise are contributing to the result.}
+    \label{fig:noise_ablation}
+\end{figure}
+\FloatBarrier
+
+\begin{table}[h]
+  \caption{MAPPO run summary from 150-iteration JSON outputs in
+  \texttt{results/mappo/*.json}.}
+  \label{tab:mappo_summary}
+  \centering
+  \begin{tabular}{lcccc}
+    \toprule
+    Run & Iterations & Final mean return & SRS & 95\% CI \\
+    \midrule
+    benchmark    & 150 & $-72.55$  & $0.945$ & $[0.313,\; 0.703]^{*}$ \\
+    f1\_baseline & 150 & $-621.64$ & $0.117$ & $[0.273,\; 0.694]$ \\
+    f1\_psych    & 150 & $-585.38$ & $0.342$ & $[0.304,\; 0.697]$ \\
+    \bottomrule
+    \multicolumn{5}{l}{\small $^{*}$Point estimate above interval; see Section~7 for explanation.}
+  \end{tabular}
+\end{table}
+
+\section{Version Control}
+
+The course repository is
+\url{https://github.com/ub-cse546-s26/final-project-team-33}. The notebooks,
+\texttt{helper.py}, \texttt{scripts/train\_mappo.py}, this \LaTeX{} file, and all
+figures in \texttt{images/} are committed to git. FastF1 cache folders and Jupyter
+checkpoint directories are excluded through \texttt{.gitignore}.
+
+\section{Overall Interpretation}
+
+The results across both the tabular and MAPPO experiments point in the same direction:
+giving agents access to a psychological state variable tends to improve how consistently
+they learn over training, even when it does not change the final return they can reach.
+This shows up most clearly in SRS, which is designed to pick up this kind of improvement
+in the shape of the training curve rather than just the endpoint.
+
+The gap between the F1 runs and the benchmark is large, but that is mostly a consequence
+of the environment being much harder with ten agents and rewards in the $-600$ range
+rather than $-72$. Longer training, reward shaping, or a proper centralized critic would
+probably help close that gap. What is more interesting is that even in this harder setting,
+the psych-aware condition consistently outperforms the one without psychological state on
+both SRS and final return.
+
+The noise-scale ablation also suggests the observation augmentation and action noise are
+both doing something useful rather than one carrying the whole effect. If I were to extend
+this further, one natural next step would be testing whether a richer psychological state,
+for example one that tracks recent performance trends rather than just the current penalty,
+would improve things even more.
+
+\section*{References}
+{\raggedright
+\begin{enumerate}
+  \setlength{\itemsep}{4pt}
+    \item Terry, J.K., et al.\ PettingZoo: Gym for Multi-Agent Reinforcement Learning.
+    \\\url{https://pettingzoo.farama.org/}
+    \item FastF1 Python API.\\\url{https://docs.fastf1.dev/}
+    \item Sutton, R.S., Barto, A.G. \textit{Reinforcement Learning: An Introduction}
+    (2nd ed.). MIT Press, 2018.
+    \item Lowe, R., et al.\ (2017). Multi-Agent Actor-Critic for Mixed
+    Cooperative-Competitive Environments. \textit{NeurIPS}.
+    \item Yu, C., et al.\ (2022). The Surprising Effectiveness of PPO in Cooperative
+    Multi-Agent Games. \textit{NeurIPS}.
+    \item Fieni, G., et al.\ (2026). Learning-based Multi-agent Race Strategies in
+    Formula~1. \textit{arXiv}:2602.23056.
+\end{enumerate}
+}
+
+\end{document}

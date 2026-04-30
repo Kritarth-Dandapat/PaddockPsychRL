@@ -1,0 +1,49 @@
+# Bytecode / packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# FastF1 / project cache (large, machine-local)
+f1_cache/
+
+# Test / type / coverage tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment secrets (if you add dotenv later)
+.env
+.env.local
+
+# LaTeX / PDF build artifacts (if you compile in-repo)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz

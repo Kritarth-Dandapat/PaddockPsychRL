@@ -1,0 +1,5 @@
+====================
+Feedback
+====================
+
+Good direction. Interesting idea to add psychological state modeling to MARL racing. One thing: the evaluation section is light. 'Strategy Resilience Score' needs more details, how will you actually compute it? Also for the MARL direction you need to solve an existing MARL environment in addition to your custom setup, make sure that's in your plan. MAPPO is the right algorithm. Also compare against a baseline MAPPO that doesn't observe psychological state, to isolate your contribution.

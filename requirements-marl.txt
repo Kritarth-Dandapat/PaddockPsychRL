@@ -1,0 +1,12 @@
+# Deep MARL (Ray RLlib MAPPO-style PPO + PettingZoo). Install on your training machine:
+#   pip install -r requirements-marl.txt
+# Pin versions to match your Ray docs if anything drifts.
+
+ray[rllib]>=2.37.0,<2.55.0
+torch>=2.0.0
+gymnasium>=0.29.0
+pettingzoo[mpe]>=1.24.0
+supersuit>=3.9.0
+numpy>=1.23.0
+pandas>=1.5.0
+fastf1>=3.0.0
