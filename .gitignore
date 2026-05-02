@@ -46,4 +46,7 @@ Thumbs.db
 *.log
 *.out
 *.toc
+*.nav
+*.snm
+*.vrb
 *.synctex.gz
