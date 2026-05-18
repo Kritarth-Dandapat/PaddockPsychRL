@@ -85,10 +85,10 @@ function populateResultsTable(results) {
   tbody.innerHTML = "";
   results.forEach((r) => {
     const tr = document.createElement("tr");
+    const iters = r.iterations ?? r.data?.length ?? 150;
     tr.innerHTML = `
       <td><strong>${r.label}</strong></td>
-      <td>${r.env}</td>
-      <td>${r.psych ? "Yes" : "No"}</td>
+      <td>${iters}</td>
       <td>${fmtReturn(r.finalReturn)}</td>
       <td>${fmtNum(r.srs, 3)}</td>`;
     tbody.appendChild(tr);
@@ -231,6 +231,7 @@ async function loadRun(run) {
     srs: data.srs_on_iter_means ?? 0,
     finalReturn: rets.length ? rets[rets.length - 1] : 0,
     data: rets,
+    iterations: data.iterations ?? rets.length,
   };
 }
 
@@ -244,7 +245,9 @@ async function init() {
   const psych = results.find((r) => r.id === "f1_psych");
 
   if (benchmark) setMetric("benchmark-srs", fmtNum(benchmark.srs, 3));
-  if (baseline) setMetric("baseline-srs", fmtNum(baseline.srs, 3));
+  if (baseline) {
+    setMetric("baseline-srs", fmtNum(baseline.srs, 3));
+  }
   if (psych) {
     setMetric("psych-srs", fmtNum(psych.srs, 3));
     setMetric("psych-return", fmtReturn(psych.finalReturn));

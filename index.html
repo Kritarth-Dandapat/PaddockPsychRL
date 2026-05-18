@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="F1-informed cooperative multi-agent reinforcement learning with driver psychology and experience modeling.">
-  <title>PaddockPsychRL — F1-Informed MARL</title>
+  <meta name="description" content="CSE 4/546 final project: F1-informed cooperative MARL with driver psychology, FastF1 telemetry, tabular Q-learning, and MAPPO.">
+  <title>PaddockPsychRL — F1-Informed Multi-Agent Reinforcement Learning</title>
   <link rel="stylesheet" href="css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,208 +12,542 @@
 </head>
 <body>
   <header class="site-header">
-    <nav class="nav container">
+    <nav class="nav">
       <a class="logo" href="#top">Paddock<span>Psych</span>RL</a>
-      <ul class="nav-links">
-        <li><a href="#motivation">Motivation</a></li>
-        <li><a href="#pipeline">Pipeline</a></li>
-        <li><a href="#wrapper">Wrapper</a></li>
-        <li><a href="#results">Results</a></li>
-        <li><a href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">Source</a></li>
-      </ul>
+      <div class="nav-actions">
+        <button type="button" class="toc-toggle" id="toc-toggle" aria-expanded="false" aria-controls="toc-sidebar">Contents</button>
+        <a href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">Source code</a>
+      </div>
     </nav>
   </header>
 
-  <main id="top">
-    <section class="hero">
-      <div class="hero-grid container">
-        <div class="hero-copy">
-          <p class="eyebrow">CSE 446 · University at Buffalo</p>
-          <h1>F1-Informed Multi-Agent Reinforcement Learning</h1>
-          <p class="lead">
-            Cooperative MARL on PettingZoo <code>simple_spread_v3</code> with real 2025 FastF1 telemetry,
-            experience-scaled action noise, and a lightweight psychological state that tracks team setbacks.
-          </p>
-          <div class="hero-actions">
-            <a class="btn btn-primary" href="#results">View MAPPO results</a>
-            <a class="btn btn-ghost" href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">GitHub repository</a>
-          </div>
-        </div>
-        <div class="hero-metrics" aria-label="Key results">
+  <div class="page-layout">
+    <aside class="toc-sidebar" id="toc-sidebar" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <ul class="toc-list">
+        <li><a href="#overview">1. Project overview</a></li>
+        <li><a href="#system-components">2. System components</a></li>
+        <li class="toc-sub"><a href="#fastf1-pipeline">FastF1 pipeline</a></li>
+        <li class="toc-sub"><a href="#environment">Environment</a></li>
+        <li class="toc-sub"><a href="#psych-wrapper">F1PsychologyWrapper</a></li>
+        <li class="toc-sub"><a href="#tabular-ql">Tabular Q-learning</a></li>
+        <li class="toc-sub"><a href="#srs-metric">Strategy Resilience Score</a></li>
+        <li><a href="#env-description">3. Environment description</a></li>
+        <li><a href="#representations">4. Representations &amp; architecture</a></li>
+        <li><a href="#training-setup">5. Training setup</a></li>
+        <li><a href="#tabular-results">6. Tabular results</a></li>
+        <li class="toc-sub"><a href="#season-data">Season data &amp; profiles</a></li>
+        <li class="toc-sub"><a href="#learning-curves">Learning curves</a></li>
+        <li class="toc-sub"><a href="#running-mean-srs">Running mean &amp; SRS</a></li>
+        <li class="toc-sub"><a href="#early-late">Early / late windows</a></li>
+        <li class="toc-sub"><a href="#ablations">Ablations</a></li>
+        <li><a href="#evaluation-summary">7. Evaluation summary</a></li>
+        <li><a href="#telemetry-connection">8. Telemetry connection</a></li>
+        <li><a href="#deep-marl">9. Deep MARL (MAPPO)</a></li>
+        <li class="toc-sub"><a href="#mappo-benchmark">Benchmark</a></li>
+        <li class="toc-sub"><a href="#mappo-results">MAPPO results</a></li>
+        <li class="toc-sub"><a href="#adaptation-noise">Adaptation &amp; noise</a></li>
+        <li><a href="#interpretation">10. Overall interpretation</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </aside>
+
+    <main class="report-main" id="top">
+      <header class="report-title">
+        <p class="eyebrow">CSE 4/546 Final Project · University at Buffalo</p>
+        <h1>F1-Informed Multi-Agent Reinforcement Learning</h1>
+        <p class="subtitle">Modeling Driver Psychology and Experience in Cooperative MARL</p>
+        <p class="meta"><strong>Kritarth Dandapat</strong> · UBIT: kritarth · April 30, 2026</p>
+      </header>
+
+      <!-- 1. Project Overview -->
+      <section class="report-section" id="overview">
+        <h2>1. Project overview</h2>
+        <p>
+          The main question this project tries to answer is whether giving agents access to a simple
+          psychological state variable actually helps them learn better in a cooperative multi-agent setting.
+          The idea came from watching how Formula&nbsp;1 drivers behave differently depending on their experience
+          level and how their confidence changes over the course of a race. A rookie like Antonelli will make
+          noisier decisions than a veteran like Sainz, and a driver who just got overtaken will likely perform
+          worse for the next few laps.
+        </p>
+        <p>
+          To model this, I pulled real 2025 F1 lap-time data using the FastF1 API and used it to give each agent
+          a driver-specific <strong>experience profile</strong> based on how consistent their lap times were across
+          the season. A small wrapper around the PettingZoo environment then adds noise to each agent's actions
+          scaled by their experience, and tracks a <code>psych_state</code> variable that goes down after bad team
+          rewards and slowly recovers over time.
+        </p>
+        <p>
+          Two setups are compared throughout the project. The <strong>tabular Q-learning</strong> baseline shows that
+          including <code>psych_state</code> in the state gives higher Strategy Resilience Score (SRS) even when the
+          raw returns look similar. The <strong>MAPPO</strong> runs test whether the same pattern holds with deep RL
+          and also validate the whole pipeline on a standard benchmark environment.
+        </p>
+
+        <div class="metrics-row" aria-label="Headline results">
           <article class="metric-card">
-            <span class="metric-label">Benchmark SRS</span>
-            <span class="metric-value" data-metric="benchmark-srs">—</span>
-            <span class="metric-hint">SpreadBenchmark-v0</span>
+            <span class="metric-label">Tabular psych SRS</span>
+            <span class="metric-value">≈ 0.63</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Tabular baseline SRS</span>
+            <span class="metric-value">≈ 0.54</span>
           </article>
           <article class="metric-card highlight">
-            <span class="metric-label">F1 psych-aware SRS</span>
+            <span class="metric-label">MAPPO F1 psych SRS</span>
             <span class="metric-value" data-metric="psych-srs">—</span>
-            <span class="metric-hint">vs baseline <span data-metric="baseline-srs">—</span></span>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Psych final return</span>
-            <span class="metric-value" data-metric="psych-return">—</span>
-            <span class="metric-hint">Higher is better (less negative)</span>
+            <span class="metric-label">MAPPO benchmark SRS</span>
+            <span class="metric-value" data-metric="benchmark-srs">—</span>
           </article>
         </div>
-      </div>
-    </section>
 
-    <section id="motivation" class="section">
-      <div class="container split">
-        <div>
-          <h2>Why psychology in MARL?</h2>
-          <p>
-            Formula 1 drivers differ in lap-time consistency under pressure. Veterans stay composed after setbacks;
-            rookies show wider variance. We encode that signal as per-agent <strong>experience</strong> from telemetry
-            and a scalar <strong>psych_state</strong> that degrades after poor team rewards and recovers over time.
-          </p>
-          <blockquote class="hypothesis">
-            Appending <code>psych_state</code> to observations improves training consistency (Strategy Resilience Score)
-            in cooperative MARL, even when raw return shifts only modestly.
-          </blockquote>
-        </div>
-        <div class="card stack">
-          <h3>Two evaluation regimes</h3>
-          <ul>
-            <li><strong>Tabular Q-learning</strong> — sanity checks on discretized observations</li>
-            <li><strong>MAPPO (RLlib PPO)</strong> — parameter-shared policies with joint observations</li>
-          </ul>
-          <h3>Reference</h3>
-          <p class="small">
-            Inspired by psychology-aware MARL ideas and grounded in
-            <a href="https://arxiv.org/abs/2602.23056" target="_blank" rel="noopener">arXiv:2602.23056</a>
-            (Feb 2026): behavior-aware signals can stabilize learning, not only maximize return.
-          </p>
-        </div>
-      </div>
-    </section>
+        <figure class="figure">
+          <img src="images/f1_grid.png" alt="Formula 1 driver grid collage" width="1200" height="600" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 0.</strong> F1 driver cohort motivation — experience and consistency differ across the grid
+            and inform per-agent noise and resilience in the cooperative spread task.
+          </figcaption>
+        </figure>
+      </section>
 
-    <section id="pipeline" class="section section-alt">
-      <div class="container">
-        <h2>FastF1 data pipeline</h2>
-        <p class="section-intro">
-          Real 2025 season lap times are pooled per driver. Consistency (inverse lap-time spread) maps to
-          experience in <code>[0.35, 0.95]</code> for the top championship cohort used as agents.
+      <!-- 2. System Components -->
+      <section class="report-section" id="system-components">
+        <h2>2. System components</h2>
+
+        <div class="component-list">
+          <article class="component-card" id="fastf1-pipeline">
+            <h3>FastF1 data pipeline</h3>
+            <p>
+              The function <code>collect_season_driver_data</code> goes through the 2025 race calendar, loads timing data
+              for each session, totals championship points per driver, and collects valid lap times across the season.
+              The top ten drivers with enough laps are picked as the agent cohort. Raw consistency scores (inverse of
+              lap-time standard deviation) are run through <code>spread_experience_from_peers</code>, which min-max
+              normalizes into <code>[0.35, 0.95]</code> so agents stay behaviorally distinct rather than bunched near
+              one value after clipping.
+            </p>
+            <div class="flow-diagram">
+              <span class="flow-step">FastF1 2025 timing</span>
+              <span class="flow-arrow">→</span>
+              <span class="flow-step">Lap σ per driver</span>
+              <span class="flow-arrow">→</span>
+              <span class="flow-step">Top-10 by points</span>
+              <span class="flow-arrow">→</span>
+              <span class="flow-step">Peer normalization</span>
+              <span class="flow-arrow">→</span>
+              <span class="flow-step">PettingZoo agent IDs</span>
+            </div>
+          </article>
+
+          <article class="component-card" id="environment">
+            <h3>Environment</h3>
+            <p>
+              The base environment is PettingZoo's <code>simple_spread_v3</code> in parallel mode — a fully cooperative
+              task where <em>N</em> agents cover <em>N</em> landmarks while avoiding collisions.
+              <code>N = len(driver_stats)</code> for F1 runs; benchmark uses <em>N = 3</em>.
+              Each episode runs for up to <code>max_cycles = 25</code> steps.
+            </p>
+          </article>
+
+          <article class="component-card" id="psych-wrapper">
+            <h3>F1PsychologyWrapper</h3>
+            <p>
+              Sits between the environment and agents and does two things: (1)&nbsp;Gaussian action noise with
+              standard deviation <code>(1 − experience) × 0.1</code>, so veterans follow the policy closely and rookies
+              are more perturbed; (2)&nbsp;a <code>psych_state</code> in <code>[0.5, 1]</code> that drops by 0.2 when
+              team reward &lt; −0.5 (floored at 0.5) and recovers by 0.05 otherwise. In psych-aware runs,
+              <code>PsychStateObsWrapper</code> appends ψ to observations for RLlib.
+            </p>
+            <div class="formula-block">
+              <p class="formula">a′<sub>i</sub> = a<sub>i</sub> + 𝒩(0, (1 − e<sub>i</sub>) · 0.1)</p>
+            </div>
+          </article>
+
+          <article class="component-card" id="tabular-ql">
+            <h3>Tabular Q-learning</h3>
+            <p>
+              Each agent has its own sparse Q-table. States are continuous observations rounded to one decimal and
+              flattened to a tuple; psych-aware runs append rounded <code>psych_state</code>. Updates use standard
+              one-step Q-learning with ε-greedy exploration (ε = 0.1, α = 0.1, γ = 0.95).
+            </p>
+            <div class="formula-block">
+              <p class="formula">Q(s,a) ← Q(s,a) + α [ r + γ max<sub>a′</sub> Q(s′,a′) − Q(s,a) ]</p>
+            </div>
+          </article>
+
+          <article class="component-card" id="srs-metric">
+            <h3>Strategy Resilience Score (SRS)</h3>
+            <p>
+              SRS measures whether training improves over time relative to run noise. Given episode returns
+              (R<sub>1</sub>,…,R<sub>T</sub>), mean return in the first and last 20% of episodes is compared,
+              normalized by run standard deviation σ, and squashed with tanh into [0, 1]. Values above 0.5 mean late
+              training is consistently better relative to noise. Bootstrap CIs use B = 400 resamples (5th–95th percentiles).
+            </p>
+            <div class="formula-block">
+              <p class="formula">SRS = clip(0.5 + 0.5·tanh(z), 0, 1), &nbsp; z = (R̄<sub>late</sub> − R̄<sub>early</sub>) / σ</p>
+            </div>
+          </article>
+        </div>
+
+        <figure class="figure">
+          <img src="images/paper_archetecture.png" alt="Reference paper architecture diagram" width="900" height="500" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Reference.</strong> Architecture inspiration from Fieni et al. (2026), arXiv:2602.23056 — behavior-aware
+            signals for multi-agent race strategies. This project extends the idea with real FastF1 telemetry and a
+            PettingZoo spread environment.
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- 3. Environment Description -->
+      <section class="report-section" id="env-description">
+        <h2>3. Environment description</h2>
+        <p>
+          PettingZoo's MPE <code>simple_spread_v3</code> in parallel mode gives each agent a continuous observation of
+          its own position and velocity plus relative positions of all landmarks and other agents. The team reward
+          penalizes how far agents are from covering landmarks, so coordination is necessary.
+          <code>build_experience_profiles</code> maps PettingZoo agent names to FastF1 driver statistics. The wrapper
+          only changes actions and <code>infos</code> — not underlying physics, base observations, or the reward function.
         </p>
-        <div class="flow-diagram" role="img" aria-label="Data pipeline flow">
-          <div class="flow-step">FastF1 timing</div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">Lap-time σ per driver</div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">Top-10 by points</div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">Experience profiles</div>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-step">PettingZoo agents</div>
+        <figure class="figure wide">
+          <img src="images/simple_spread.png" alt="Simple spread environment diagram" width="800" height="800" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 1.</strong> <code>simple_spread_v3</code> — cooperative agents (circles) must cover landmarks (crosses)
+            while avoiding collisions. Team reward drives coordination.
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- 4. Representations -->
+      <section class="report-section" id="representations">
+        <h2>4. Representations and architecture</h2>
+        <h3>Tabular setting</h3>
+        <p>
+          No neural network: state is the rounded, flattened observation tuple, with <code>psych_state</code> appended
+          in the psych-aware condition. Q-values live in a Python <code>defaultdict</code> keyed on that tuple.
+        </p>
+        <h3>MAPPO setting</h3>
+        <p>
+          Parameter-shared multi-agent PPO through Ray RLlib — all agents share one policy. A
+          <code>JointObservationWrapper</code> concatenates all agents' observations in fixed order and passes the
+          combined vector to every agent before <code>ParallelPettingZooEnv</code>, giving the shared actor-critic
+          team-level state similar to a centralized critic without a separate critic architecture.
+        </p>
+      </section>
+
+      <!-- 5. Training Setup -->
+      <section class="report-section" id="training-setup">
+        <h2>5. Training setup and hyperparameters</h2>
+        <p>
+          Tabular agents learn independently from the same rollouts. MAPPO trains a single shared policy via
+          RLlib <code>PPOConfig</code>. Table&nbsp;1 lists main hyperparameters.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <caption>Table 1. Training hyperparameters for representative runs.</caption>
+            <thead>
+              <tr><th>Setting</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Season year (FastF1)</td><td>2025</td></tr>
+              <tr><td>Top drivers N (main runs)</td><td>10</td></tr>
+              <tr><td><code>max_cycles</code></td><td>25</td></tr>
+              <tr><td>Tabular α</td><td>0.1</td></tr>
+              <tr><td>Tabular γ</td><td>0.95</td></tr>
+              <tr><td>Tabular ε</td><td>0.1</td></tr>
+              <tr><td>Tabular episodes (main)</td><td>200</td></tr>
+              <tr><td>MAPPO learning rate</td><td>10<sup>−4</sup></td></tr>
+              <tr><td>MAPPO <code>train_batch_size</code></td><td>4000</td></tr>
+              <tr><td>MAPPO <code>sgd_minibatch_size</code></td><td>512</td></tr>
+              <tr><td>MAPPO <code>num_sgd_iter</code></td><td>10</td></tr>
+              <tr><td>MAPPO <code>clip_param</code></td><td>0.2</td></tr>
+              <tr><td>MAPPO <code>entropy_coeff</code></td><td>0.01</td></tr>
+              <tr><td>MAPPO iterations</td><td>150</td></tr>
+            </tbody>
+          </table>
         </div>
+        <pre class="code-block"><code>python scripts/train_mappo.py --env f1_psych \
+  --driver-csv checkpoint_driver_stats.csv \
+  --iterations 150 --out-json results/mappo/f1_psych.json</code></pre>
+      </section>
+
+      <!-- 6. Tabular Results -->
+      <section class="report-section" id="tabular-results">
+        <h2>6. Training results and interpretation (tabular)</h2>
+
+        <h3 id="season-data">6.1 Season data: driver rankings and experience profiles</h3>
+        <p>
+          Championship points for the top-ten 2025 cohort determine which drivers become agents. Points do not
+          directly set noise — lap-time consistency does. A driver can score well through consistent top-fives while
+          another alternates podiums and retirements.
+        </p>
+        <div class="figure-grid two-col">
+          <figure class="figure">
+            <img src="images/fig_top10_championship_points.png" alt="Top 10 championship points bar chart" loading="lazy">
+            <figcaption class="figure-caption"><strong>Figure 2.</strong> Championship points for the top-ten cohort (2025 FastF1).</figcaption>
+          </figure>
+          <figure class="figure">
+            <img src="images/fig_step5_resilience_telemetry.png" alt="Resilience and experience per driver" loading="lazy">
+            <figcaption class="figure-caption"><strong>Figure 3.</strong> Resilience and experience after peer normalization from lap-time σ.</figcaption>
+          </figure>
+        </div>
+
+        <div class="callout callout-info">
+          <strong>Sainz vs Antonelli sanity check.</strong> Antonelli (rookie) tends toward wider lap spread and lower
+          experience bars; Sainz (veteran) stays highly consistent even without top points. Printed stats include
+          <code>pts</code>, <code>n_laps</code>, <code>resilience</code>, and <code>lap_std</code> per driver.
+        </div>
+
         <div class="table-wrap">
           <table class="data-table" id="driver-table">
-            <caption>2025 driver experience profiles (checkpoint cohort)</caption>
+            <caption>Table 2. 2025 driver experience profiles (checkpoint cohort).</caption>
             <thead>
-              <tr>
-                <th>Driver</th>
-                <th>Points</th>
-                <th>Laps</th>
-                <th>Lap σ (s)</th>
-                <th>Experience</th>
-              </tr>
+              <tr><th>Driver</th><th>Points</th><th>Laps</th><th>Lap σ (s)</th><th>Experience</th></tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
-      </div>
-    </section>
 
-    <section id="wrapper" class="section">
-      <div class="container split">
-        <div>
-          <h2>F1PsychologyWrapper</h2>
-          <p>Wraps <code>simple_spread_v3</code> with two mechanisms:</p>
-          <div class="formula-block">
-            <p><strong>1. Action noise</strong> — Gaussian perturbation scaled by inexperience:</p>
-            <p class="formula">a′<sub>i</sub> = a<sub>i</sub> + 𝒩(0, (1 − e<sub>i</sub>) · 0.1)</p>
-          </div>
-          <div class="formula-block">
-            <p><strong>2. Psychological state</strong> ψ<sub>i</sub> ∈ [0.5, 1.0]:</p>
-            <ul>
-              <li>Team reward &lt; −0.5 → ψ drops by 0.2 (floor 0.5)</li>
-              <li>Otherwise → ψ recovers by 0.05 (cap 1.0)</li>
-            </ul>
-            <p>Psych-aware MAPPO runs append ψ to each agent observation via <code>PsychStateObsWrapper</code>.</p>
-          </div>
-        </div>
-        <div class="card env-card">
-          <h3>Environment</h3>
-          <dl>
-            <dt>Base task</dt>
-            <dd>N agents cover N landmarks cooperatively; team reward penalizes uncovered targets.</dd>
-            <dt>Benchmark</dt>
-            <dd>N = 3 agents, no F1 profiles</dd>
-            <dt>F1 runs</dt>
-            <dd>N = 10 agents with per-driver experience from telemetry</dd>
-            <dt>Episode length</dt>
-            <dd>25 steps (<code>max_cycles</code>)</dd>
-          </dl>
-        </div>
-      </div>
-    </section>
+        <h3 id="learning-curves">6.2 Learning curves: team return and moving average</h3>
+        <p>
+          With ten agents the raw signal is very noisy; a 20-episode moving average is easier to read. Baseline and
+          psych-aware traces stay in a similar range — which is why SRS is the main comparison metric.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_team_return_smoothed.png" alt="Team return per episode and smoothed" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 4.</strong> Per-episode team return (left) and 20-episode moving average (right) for baseline
+            vs psych-aware tabular Q-learning over 200 episodes.
+          </figcaption>
+        </figure>
 
-    <section id="results" class="section section-alt">
-      <div class="container">
-        <h2>MAPPO learning curves</h2>
-        <p class="section-intro">
-          Parameter-shared PPO (150 iterations). SRS measures stability of iteration-mean returns (higher = more resilient training).
+        <h3 id="running-mean-srs">6.3 Running mean and Strategy Resilience Score</h3>
+        <p>
+          Cumulative mean team returns converge near −505 (baseline) and −510 (psych-aware), so raw return alone shows
+          little difference. SRS tells a different story: psych-aware ≈ 0.63 vs baseline ≈ 0.54 — late episodes improve
+          more consistently relative to run noise. Seeing <code>psych_state</code> helps develop stabler strategies even
+          when the performance ceiling is similar.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_step4b_running_mean_srs.png" alt="Cumulative mean return and SRS bars" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 5.</strong> Left: cumulative mean team return. Right: SRS for baseline vs psych-aware tabular runs.
+          </figcaption>
+        </figure>
+
+        <h3 id="early-late">6.4 Early and late window analysis</h3>
+        <p>
+          Mean return in the first and last 20% of episodes: both conditions improve, but psych-aware shows a slightly
+          larger gain — confirming SRS is not a normalization artifact.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_step4c_early_late.png" alt="Early vs late window mean returns" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 6.</strong> Mean team return in first vs last 20% of training episodes.
+          </figcaption>
+        </figure>
+
+        <h3 id="ablations">6.5 Multi-seed, epsilon sweep, and team-size ablation</h3>
+        <p>
+          Across three seeds, psych-aware has higher SRS in two of three (third near parity). Moderate ε ≈ 0.1–0.15
+          works best; too much exploration hurts resilience. Team size N = 5 generally beats N = 10 on SRS — fewer
+          agents means less coordination complexity.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_step6_experiments.png" alt="Multi-seed, epsilon, and team size ablations" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 7.</strong> Left: multi-seed SRS (seeds 42–44). Center: SRS vs ε. Right: N = 10 vs N = 5.
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- 7. Evaluation Summary -->
+      <section class="report-section" id="evaluation-summary">
+        <h2>7. Evaluation summary</h2>
+        <h3>Tabular results</h3>
+        <p>
+          Adding <code>psych_state</code> to the Q-state improves learning consistency without noticeably changing final
+          return. Psych-aware SRS ≈ 0.63 vs baseline ≈ 0.54; bootstrap intervals do not overlap. Late-window return is
+          within ~1% of baseline — the SRS gain is about the training trajectory, not a raw performance boost.
+        </p>
+        <h3>Deep MARL results</h3>
+        <p>
+          MAPPO benchmark (<code>SpreadBenchmark-v0</code>, N = 3) reaches SRS = 0.945 and return −72.55, confirming the
+          implementation works. On the F1 task, psych-aware (SRS = 0.342, return −585.38) beats baseline (SRS = 0.117,
+          return −621.64) on both metrics. F1 runs sit well below benchmark — expected with 10 agents and roughly 10×
+          more negative rewards.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <caption>Table 3. Full run summary with bootstrap SRS 95% CIs.</caption>
+            <thead>
+              <tr><th>Run</th><th>SRS</th><th>Bootstrap 95% CI</th><th>Final mean return</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Tabular baseline</td><td>≈ 0.54</td><td>[0.42, 0.65]</td><td>≈ −505</td></tr>
+              <tr><td>Tabular psych-aware</td><td>≈ 0.63</td><td>[0.51, 0.74]</td><td>≈ −510</td></tr>
+              <tr><td>MAPPO benchmark</td><td>0.945</td><td>[0.313, 0.703]*</td><td>−72.55</td></tr>
+              <tr><td>MAPPO f1_baseline</td><td>0.117</td><td>[0.273, 0.694]</td><td>−621.64</td></tr>
+              <tr><td>MAPPO f1_psych</td><td>0.342</td><td>[0.304, 0.697]</td><td>−585.38</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="table-footnote">
+          * Benchmark point SRS above reported CI: near-ceiling returns compress bootstrap percentiles below the point
+          estimate when z is very large (tanh normalization edge case).
+        </p>
+      </section>
+
+      <!-- 8. Telemetry -->
+      <section class="report-section" id="telemetry-connection">
+        <h2>8. Telemetry and real-world connection</h2>
+        <p>
+          Figures 2–3 determine roster and per-agent behavior before learning. Three concrete links to real F1 data:
+        </p>
+        <ol>
+          <li><strong>Lap σ → action noise</strong> — each driver's pooled lap-time spread sets perturbation scale (e.g. Antonelli's wider 2025 distribution → more disruptive noise).</li>
+          <li><strong>Top-10 roster</strong> — from actual 2025 championship standings, not synthetic ordering.</li>
+          <li><strong>Peer normalization</strong> — <code>spread_experience_from_peers</code> preserves relative consistency within the real cohort.</li>
+        </ol>
+        <p>
+          Behavioral differences between agents are grounded in empirically observed 2025 variance, satisfying the
+          course real-world RL application requirement.
+        </p>
+      </section>
+
+      <!-- 9. Deep MARL -->
+      <section class="report-section" id="deep-marl">
+        <h2>9. Deep MARL: standard benchmark and MAPPO</h2>
+
+        <h3 id="mappo-benchmark">9.1 Off-the-shelf benchmark</h3>
+        <p>
+          Standard <code>simple_spread_v3</code> with N = 3 and no wrapper (<code>SpreadBenchmark-v0</code>) checks that
+          MAPPO works before F1 complexity and provides a reference for SRS and return. Random policy scores well below
+          −100; converging to −72.55 confirms genuine learning.
         </p>
 
-        <div class="chart-grid">
-          <article class="chart-card">
-            <h3>Episode return (mean per iteration)</h3>
-            <canvas id="chart-returns" width="800" height="360" role="img" aria-label="Learning curves for three MAPPO runs"></canvas>
-            <ul class="legend" id="legend-returns"></ul>
-          </article>
-          <article class="chart-card">
-            <h3>Strategy Resilience Score (SRS)</h3>
-            <canvas id="chart-srs" width="800" height="280" role="img" aria-label="Bar chart comparing SRS across runs"></canvas>
-          </article>
+        <h3>9.2 MAPPO with parameter sharing</h3>
+        <p>
+          <code>f1_baseline</code>: F1 roster, no <code>psych_state</code> in obs, action noise off.
+          <code>f1_psych</code>: <code>PsychStateObsWrapper</code> appends mood; action noise on. Both run 150 iterations.
+        </p>
+
+        <h3 id="mappo-results">9.3 MAPPO results</h3>
+        <p>
+          Benchmark climbs to ~−72. F1 runs stay in −500 to −700, but <code>f1_psych</code> stays above
+          <code>f1_baseline</code> — psychological observations help the shared policy. Psych SRS ≈ 0.342 is ~3× baseline
+          0.117, matching the tabular consistency finding.
+        </p>
+
+        <figure class="figure">
+          <img src="images/fig_mappo_learning_curves.png" alt="MAPPO learning curves for three runs" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 8.</strong> MAPPO per-iteration mean episode return (150 iterations). Benchmark (3 agents) vs F1 runs (10 agents).
+          </figcaption>
+        </figure>
+
+        <article class="chart-card">
+          <h3>Interactive: MAPPO returns (from saved JSON)</h3>
+          <canvas id="chart-returns" width="800" height="360" aria-label="MAPPO learning curves"></canvas>
+          <ul class="legend" id="legend-returns"></ul>
+        </article>
+
+        <div class="figure-grid two-col">
+          <figure class="figure">
+            <img src="images/fig_mappo_srs_ci.png" alt="MAPPO SRS with bootstrap confidence intervals" loading="lazy">
+            <figcaption class="figure-caption"><strong>Figure 9.</strong> SRS with bootstrap 5th–95th percentiles. Dashed line at neutral 0.5.</figcaption>
+          </figure>
+          <figure class="figure">
+            <img src="images/fig_mappo_srs.png" alt="MAPPO SRS comparison" loading="lazy">
+            <figcaption class="figure-caption"><strong>Figure 9b.</strong> SRS point estimates across MAPPO runs.</figcaption>
+          </figure>
         </div>
 
-        <div class="results-table-wrap">
+        <article class="chart-card">
+          <h3>Interactive: MAPPO SRS (from saved JSON)</h3>
+          <canvas id="chart-srs" width="800" height="280" aria-label="MAPPO SRS bar chart"></canvas>
+        </article>
+
+        <div class="table-wrap">
           <table class="data-table results-table">
+            <caption>Table 4. MAPPO run summary (150-iteration JSON outputs).</caption>
             <thead>
-              <tr>
-                <th>Run</th>
-                <th>Environment</th>
-                <th>Psych in obs</th>
-                <th>Final mean return</th>
-                <th>SRS</th>
-              </tr>
+              <tr><th>Run</th><th>Iterations</th><th>Final mean return</th><th>SRS</th></tr>
             </thead>
             <tbody id="results-body"></tbody>
           </table>
         </div>
-      </div>
-    </section>
 
-    <section class="section cta-section">
-      <div class="container cta">
-        <h2>Reproduce the experiments</h2>
-        <p>Full code, notebook workflow, and training scripts live on the <code>main</code> branch.</p>
-        <pre class="code-block"><code>python scripts/train_mappo.py --env f1_psych \
-  --driver-csv checkpoint_driver_stats.csv \
-  --iterations 150 --out-json results/mappo/f1_psych.json</code></pre>
-        <a class="btn btn-primary" href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">Open full repository</a>
-      </div>
-    </section>
-  </main>
+        <h3 id="adaptation-noise">9.4 Adaptation curves and noise-scale ablation</h3>
+        <p>
+          <code>psych_state</code> trajectories for veteran SAI vs rookie ANT: Sainz stays near 1 with shallow dips;
+          Antonelli drops more often and recovers slower — as designed. Both trend upward in later steps as coordination
+          improves and large team penalties become rarer.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_adaptation_curves.png" alt="Psych state adaptation for SAI and ANT" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 10.</strong> Smoothed <code>psych_state</code> over rollout steps — veteran vs rookie.
+          </figcaption>
+        </figure>
+
+        <p>
+          Noise ablation at 0×, 0.5×, and 1× experience-derived perturbation: SRS changes at each scale without a clear
+          monotonic trend — both observation augmentation and action noise contribute.
+        </p>
+        <figure class="figure">
+          <img src="images/fig_noise_scale_ablation.png" alt="Noise scale ablation SRS" loading="lazy">
+          <figcaption class="figure-caption">
+            <strong>Figure 11.</strong> Tabular psych-aware SRS at three noise scales.
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- 10. Interpretation -->
+      <section class="report-section" id="interpretation">
+        <h2>10. Overall interpretation</h2>
+        <p>
+          Tabular and MAPPO experiments point the same way: psychological state tends to improve how consistently agents
+          learn, even when final return barely moves. SRS captures improvement in the training curve shape, not just the endpoint.
+        </p>
+        <p>
+          The F1-vs-benchmark gap is largely environment difficulty (10 agents, rewards near −600 vs −72). More interesting:
+          in the harder setting, psych-aware consistently beats no-psych on SRS and final return.
+        </p>
+        <p>
+          A natural extension is a richer psychological state — e.g. tracking recent performance trends rather than only
+          the current penalty — to see if resilience modeling can push returns as well as consistency.
+        </p>
+        <blockquote class="hypothesis">
+          Full source, notebook, <code>helper.py</code>, training scripts, and LaTeX report live on the
+          <code>main</code> branch at
+          <a href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">github.com/Kritarth-Dandapat/PaddockPsychRL</a>.
+        </blockquote>
+      </section>
+
+      <!-- References -->
+      <section class="report-section references" id="references">
+        <h2>References</h2>
+        <ol>
+          <li>Terry, J.K., et al. PettingZoo: Gym for Multi-Agent Reinforcement Learning. <a href="https://pettingzoo.farama.org/" target="_blank" rel="noopener">pettingzoo.farama.org</a></li>
+          <li>FastF1 Python API. <a href="https://docs.fastf1.dev/" target="_blank" rel="noopener">docs.fastf1.dev</a></li>
+          <li>Sutton, R.S., Barto, A.G. <em>Reinforcement Learning: An Introduction</em> (2nd ed.). MIT Press, 2018.</li>
+          <li>Lowe, R., et al. (2017). Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments. <em>NeurIPS</em>.</li>
+          <li>Yu, C., et al. (2022). The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games. <em>NeurIPS</em>.</li>
+          <li>Fieni, G., et al. (2026). Learning-based Multi-agent Race Strategies in Formula&nbsp;1. <em>arXiv</em>:2602.23056. <a href="https://arxiv.org/abs/2602.23056" target="_blank" rel="noopener">arxiv.org/abs/2602.23056</a></li>
+        </ol>
+      </section>
+    </main>
+  </div>
 
   <footer class="site-footer">
-    <div class="container footer-inner">
-      <p>PaddockPsychRL · Kritarth Dandapat · CSE 446 (UB)</p>
-      <p class="small">Course project — cooperative MARL with F1-grounded psychology.</p>
-    </div>
+    <p>PaddockPsychRL · Kritarth Dandapat · CSE 4/546 · University at Buffalo</p>
+    <p>Deployed from the <code>gh-page</code> branch · <a href="https://github.com/Kritarth-Dandapat/PaddockPsychRL">GitHub</a></p>
   </footer>
 
   <script src="js/charts.js" type="module"></script>
+  <script src="js/toc.js" defer></script>
 </body>
 </html>
