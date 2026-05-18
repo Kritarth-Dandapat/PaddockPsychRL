@@ -3,7 +3,7 @@ const RUNS = [
     id: "benchmark",
     label: "Benchmark",
     file: "data/benchmark.json",
-    color: "#6b8cff",
+    color: "#4f6fd8",
     env: "SpreadBenchmark-v0",
     psych: false,
   },
@@ -11,7 +11,7 @@ const RUNS = [
     id: "f1_baseline",
     label: "F1 baseline",
     file: "data/f1_baseline.json",
-    color: "#9aa3b5",
+    color: "#6b7280",
     env: "F1 spread (10 agents)",
     psych: false,
   },
@@ -104,6 +104,16 @@ function buildLegend(container, runs) {
   });
 }
 
+function chartTheme() {
+  const root = getComputedStyle(document.documentElement);
+  return {
+    bg: root.getPropertyValue("--chart-bg").trim() || "#ffffff",
+    grid: root.getPropertyValue("--chart-grid").trim() || "#e2e8f0",
+    muted: root.getPropertyValue("--text-muted").trim() || "#5c6478",
+    text: root.getPropertyValue("--text").trim() || "#1a1d26",
+  };
+}
+
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -118,6 +128,7 @@ function setupCanvas(canvas) {
 
 function drawLineChart(canvas, seriesList) {
   const { ctx, w, h } = setupCanvas(canvas);
+  const theme = chartTheme();
   const pad = { top: 24, right: 20, bottom: 36, left: 56 };
   const plotW = w - pad.left - pad.right;
   const plotH = h - pad.top - pad.bottom;
@@ -136,10 +147,10 @@ function drawLineChart(canvas, seriesList) {
   ymin -= yPad;
   ymax += yPad;
 
-  ctx.fillStyle = "#181b24";
+  ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = "#2a2f3d";
+  ctx.strokeStyle = theme.grid;
   ctx.lineWidth = 1;
   const gridLines = 5;
   for (let i = 0; i <= gridLines; i++) {
@@ -149,13 +160,13 @@ function drawLineChart(canvas, seriesList) {
     ctx.lineTo(pad.left + plotW, y);
     ctx.stroke();
     const val = ymax - ((ymax - ymin) * i) / gridLines;
-    ctx.fillStyle = "#9aa3b5";
+    ctx.fillStyle = theme.muted;
     ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "right";
     ctx.fillText(fmtNum(val, 0), pad.left - 8, y + 4);
   }
 
-  ctx.fillStyle = "#9aa3b5";
+  ctx.fillStyle = theme.muted;
   ctx.textAlign = "center";
   ctx.fillText("Iteration", pad.left + plotW / 2, h - 8);
   ctx.save();
@@ -180,12 +191,13 @@ function drawLineChart(canvas, seriesList) {
 
 function drawSrsChart(canvas, results) {
   const { ctx, w, h } = setupCanvas(canvas);
+  const theme = chartTheme();
   const pad = { top: 24, right: 20, bottom: 48, left: 48 };
   const plotW = w - pad.left - pad.right;
   const plotH = h - pad.top - pad.bottom;
   const maxSrs = 1;
 
-  ctx.fillStyle = "#181b24";
+  ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, w, h);
 
   const barW = plotW / results.length;
@@ -200,12 +212,12 @@ function drawSrsChart(canvas, results) {
     ctx.roundRect(x, y, bw, barH, 4);
     ctx.fill();
 
-    ctx.fillStyle = "#e8eaef";
+    ctx.fillStyle = theme.text;
     ctx.font = "600 12px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(fmtNum(r.srs, 3), x + bw / 2, y - 8);
 
-    ctx.fillStyle = "#9aa3b5";
+    ctx.fillStyle = theme.muted;
     ctx.font = "11px Inter, sans-serif";
     const label = r.label.replace(" ", "\n");
     const lines = label.split("\n");
@@ -214,7 +226,7 @@ function drawSrsChart(canvas, results) {
     });
   });
 
-  ctx.strokeStyle = "#2a2f3d";
+  ctx.strokeStyle = theme.grid;
   ctx.beginPath();
   ctx.moveTo(pad.left, pad.top + plotH);
   ctx.lineTo(pad.left + plotW, pad.top + plotH);
