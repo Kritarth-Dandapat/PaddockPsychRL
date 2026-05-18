@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="F1-informed cooperative multi-agent reinforcement learning with driver psychology and experience modeling.">
+  <title>PaddockPsychRL — F1-Informed MARL</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav container">
+      <a class="logo" href="#top">Paddock<span>Psych</span>RL</a>
+      <ul class="nav-links">
+        <li><a href="#motivation">Motivation</a></li>
+        <li><a href="#pipeline">Pipeline</a></li>
+        <li><a href="#wrapper">Wrapper</a></li>
+        <li><a href="#results">Results</a></li>
+        <li><a href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">Source</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-grid container">
+        <div class="hero-copy">
+          <p class="eyebrow">CSE 446 · University at Buffalo</p>
+          <h1>F1-Informed Multi-Agent Reinforcement Learning</h1>
+          <p class="lead">
+            Cooperative MARL on PettingZoo <code>simple_spread_v3</code> with real 2025 FastF1 telemetry,
+            experience-scaled action noise, and a lightweight psychological state that tracks team setbacks.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#results">View MAPPO results</a>
+            <a class="btn btn-ghost" href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">GitHub repository</a>
+          </div>
+        </div>
+        <div class="hero-metrics" aria-label="Key results">
+          <article class="metric-card">
+            <span class="metric-label">Benchmark SRS</span>
+            <span class="metric-value" data-metric="benchmark-srs">—</span>
+            <span class="metric-hint">SpreadBenchmark-v0</span>
+          </article>
+          <article class="metric-card highlight">
+            <span class="metric-label">F1 psych-aware SRS</span>
+            <span class="metric-value" data-metric="psych-srs">—</span>
+            <span class="metric-hint">vs baseline <span data-metric="baseline-srs">—</span></span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Psych final return</span>
+            <span class="metric-value" data-metric="psych-return">—</span>
+            <span class="metric-hint">Higher is better (less negative)</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="motivation" class="section">
+      <div class="container split">
+        <div>
+          <h2>Why psychology in MARL?</h2>
+          <p>
+            Formula 1 drivers differ in lap-time consistency under pressure. Veterans stay composed after setbacks;
+            rookies show wider variance. We encode that signal as per-agent <strong>experience</strong> from telemetry
+            and a scalar <strong>psych_state</strong> that degrades after poor team rewards and recovers over time.
+          </p>
+          <blockquote class="hypothesis">
+            Appending <code>psych_state</code> to observations improves training consistency (Strategy Resilience Score)
+            in cooperative MARL, even when raw return shifts only modestly.
+          </blockquote>
+        </div>
+        <div class="card stack">
+          <h3>Two evaluation regimes</h3>
+          <ul>
+            <li><strong>Tabular Q-learning</strong> — sanity checks on discretized observations</li>
+            <li><strong>MAPPO (RLlib PPO)</strong> — parameter-shared policies with joint observations</li>
+          </ul>
+          <h3>Reference</h3>
+          <p class="small">
+            Inspired by psychology-aware MARL ideas and grounded in
+            <a href="https://arxiv.org/abs/2602.23056" target="_blank" rel="noopener">arXiv:2602.23056</a>
+            (Feb 2026): behavior-aware signals can stabilize learning, not only maximize return.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="pipeline" class="section section-alt">
+      <div class="container">
+        <h2>FastF1 data pipeline</h2>
+        <p class="section-intro">
+          Real 2025 season lap times are pooled per driver. Consistency (inverse lap-time spread) maps to
+          experience in <code>[0.35, 0.95]</code> for the top championship cohort used as agents.
+        </p>
+        <div class="flow-diagram" role="img" aria-label="Data pipeline flow">
+          <div class="flow-step">FastF1 timing</div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">Lap-time σ per driver</div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">Top-10 by points</div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">Experience profiles</div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">PettingZoo agents</div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="driver-table">
+            <caption>2025 driver experience profiles (checkpoint cohort)</caption>
+            <thead>
+              <tr>
+                <th>Driver</th>
+                <th>Points</th>
+                <th>Laps</th>
+                <th>Lap σ (s)</th>
+                <th>Experience</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="wrapper" class="section">
+      <div class="container split">
+        <div>
+          <h2>F1PsychologyWrapper</h2>
+          <p>Wraps <code>simple_spread_v3</code> with two mechanisms:</p>
+          <div class="formula-block">
+            <p><strong>1. Action noise</strong> — Gaussian perturbation scaled by inexperience:</p>
+            <p class="formula">a′<sub>i</sub> = a<sub>i</sub> + 𝒩(0, (1 − e<sub>i</sub>) · 0.1)</p>
+          </div>
+          <div class="formula-block">
+            <p><strong>2. Psychological state</strong> ψ<sub>i</sub> ∈ [0.5, 1.0]:</p>
+            <ul>
+              <li>Team reward &lt; −0.5 → ψ drops by 0.2 (floor 0.5)</li>
+              <li>Otherwise → ψ recovers by 0.05 (cap 1.0)</li>
+            </ul>
+            <p>Psych-aware MAPPO runs append ψ to each agent observation via <code>PsychStateObsWrapper</code>.</p>
+          </div>
+        </div>
+        <div class="card env-card">
+          <h3>Environment</h3>
+          <dl>
+            <dt>Base task</dt>
+            <dd>N agents cover N landmarks cooperatively; team reward penalizes uncovered targets.</dd>
+            <dt>Benchmark</dt>
+            <dd>N = 3 agents, no F1 profiles</dd>
+            <dt>F1 runs</dt>
+            <dd>N = 10 agents with per-driver experience from telemetry</dd>
+            <dt>Episode length</dt>
+            <dd>25 steps (<code>max_cycles</code>)</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section id="results" class="section section-alt">
+      <div class="container">
+        <h2>MAPPO learning curves</h2>
+        <p class="section-intro">
+          Parameter-shared PPO (150 iterations). SRS measures stability of iteration-mean returns (higher = more resilient training).
+        </p>
+
+        <div class="chart-grid">
+          <article class="chart-card">
+            <h3>Episode return (mean per iteration)</h3>
+            <canvas id="chart-returns" width="800" height="360" role="img" aria-label="Learning curves for three MAPPO runs"></canvas>
+            <ul class="legend" id="legend-returns"></ul>
+          </article>
+          <article class="chart-card">
+            <h3>Strategy Resilience Score (SRS)</h3>
+            <canvas id="chart-srs" width="800" height="280" role="img" aria-label="Bar chart comparing SRS across runs"></canvas>
+          </article>
+        </div>
+
+        <div class="results-table-wrap">
+          <table class="data-table results-table">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Environment</th>
+                <th>Psych in obs</th>
+                <th>Final mean return</th>
+                <th>SRS</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section cta-section">
+      <div class="container cta">
+        <h2>Reproduce the experiments</h2>
+        <p>Full code, notebook workflow, and training scripts live on the <code>main</code> branch.</p>
+        <pre class="code-block"><code>python scripts/train_mappo.py --env f1_psych \
+  --driver-csv checkpoint_driver_stats.csv \
+  --iterations 150 --out-json results/mappo/f1_psych.json</code></pre>
+        <a class="btn btn-primary" href="https://github.com/Kritarth-Dandapat/PaddockPsychRL" target="_blank" rel="noopener">Open full repository</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>PaddockPsychRL · Kritarth Dandapat · CSE 446 (UB)</p>
+      <p class="small">Course project — cooperative MARL with F1-grounded psychology.</p>
+    </div>
+  </footer>
+
+  <script src="js/charts.js" type="module"></script>
+</body>
+</html>
